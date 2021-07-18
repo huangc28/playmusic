@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -83,15 +82,29 @@ func HandleHttp(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Server.
 func main() {
-	log.Println("DEBUG 1")
-
 	flag.Parse()
 
-	http.HandleFunc("/", Handle)
+	// We need to initialize hub in a gorouting to handle following
+	// jobs in the background:
+	//   - client (connection) register.
+	//   - client (connection) unregister.
+	//   - broadcast message to everyone(other clients) in the chatroom.
+	hub := newHub()
+	go hub.Run()
 
-	log.Println("DEBUG 2")
+	// Serve http request handler
+	// Serve websocket request handler
+	http.HandleFunc("/", serveHome)
+	http.HandleFunc("/ws/chatroom", serveChatroom)
+	http.HandleFunc("/ws/music-stream", func(w http.ResponseWriter, r *http.Request) {
+		serveMusicStream(hub, w, r)
+	})
+
+	http.HandleFunc("/ws/music-stream-v1", func(w http.ResponseWriter, r *http.Request) {
+		websocket.Handler(HandleWebSockets).ServeHTTP(w, r)
+	})
+
 	glog.Infof("Serving...")
 	glog.Fatal(http.ListenAndServe(":8080", nil))
 }

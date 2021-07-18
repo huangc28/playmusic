@@ -1,14 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/golang/glog"
+	gorillaws "github.com/gorilla/websocket"
 	"github.com/kkdai/youtube/v2"
 	"golang.org/x/net/http/httpproxy"
 	"golang.org/x/net/websocket"
@@ -101,5 +104,144 @@ func HandleWebSockets(ws *websocket.Conn) {
 		glog.Infof("Client stopped listening... %v", err.Error())
 
 		return
+	}
+}
+
+func serveHome(w http.ResponseWriter, r *http.Request) {
+	type Msg struct {
+		OK bool
+	}
+
+	data := Msg{true}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		w.Write([]byte("request failed"))
+	}
+}
+
+var upgrader = gorillaws.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+}
+
+func serveChatroom(w http.ResponseWriter, r *http.Request) {}
+
+// We need to find a way to handle err response
+func serveMusicStream(h *Hub, w http.ResponseWriter, r *http.Request) {
+	// We need to upgrade incoming request to websocket.
+	conn, err := upgrader.Upgrade(w, r, nil)
+
+	if err != nil {
+		log.Printf("failed to upgrade connection %v", conn)
+
+		return
+	}
+
+	// Initialize a client that consist of connection info
+	client := &Client{
+		hub:  h,
+		conn: conn,
+		send: make(chan []byte, 256),
+	}
+
+	client.hub.register <- client
+
+	go streamMusic(client)
+	// defer client.conn.Close()
+
+	// spawn go routine to handle music stream.
+	// go streamMusic()
+	// type ExMsg struct {
+	// 	Hello bool `json:"hello"`
+	// }
+
+	// msg := ExMsg{Hello: true}
+
+	// client.conn.WriteJSON(msg)
+}
+
+func streamMusic(c *Client) {
+	defer func() {
+		c.hub.unregister <- c
+	}()
+
+	// Retrieve music stream
+	httpClient := getDlClient()
+
+	video, err := httpClient.GetVideo(ExampleYTUrl)
+
+	if err != nil {
+		c.conn.WriteJSON(
+			ErrMessage{
+				Err: fmt.Sprintf("failed to get video data: %s", err.Error()),
+			},
+		)
+
+		// void return the go-routine.
+		return
+	}
+
+	// send chunks of byte data client
+	format := video.Formats.FindByItag(140)
+	stream, size, err := httpClient.GetStream(
+		video,
+		format,
+	)
+
+	if err != nil {
+		glog.Info("failed to get video stream %s", err.Error())
+
+		c.conn.WriteJSON(
+			ErrMessage{Err: fmt.Sprintf("failed to get video stream data %s:", err.Error())},
+		)
+
+		return
+	}
+
+	glog.Info("content size %d", size)
+
+	defer stream.Close()
+
+	buf := make([]byte, 32*1024)
+	var written int64 = 0
+
+	for {
+		rn, re := stream.Read(buf)
+
+		// if no byte rn is read, nothings needs to be send to socket.
+		if rn > 0 {
+			if err := c.conn.WriteMessage(
+				gorillaws.BinaryMessage,
+				buf[0:rn],
+			); err != nil {
+				c.conn.WriteJSON(
+					ErrMessage{
+						Err: fmt.Sprintf("failed to send video byte chunk %s", err.Error()),
+					},
+				)
+
+				break
+			}
+
+			written += int64(rn)
+			glog.Infof("total read length %d", written)
+		}
+
+		if re != nil {
+			if re == io.EOF {
+				// We've reached end of file. shutdown the connection gracefully.
+				glog.Info("end of file")
+
+				break
+			}
+
+			// websocket.ErrBadClosingStatus.ErrorString
+			c.conn.WriteJSON(
+				ErrMessage{
+					Err: fmt.Sprintf("failed to read video byte chunk %s", err.Error()),
+				},
+			)
+		}
 	}
 }

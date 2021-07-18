@@ -23,6 +23,10 @@ type Message struct {
 	Message string `json:"message,omitempty"`
 }
 
+type ExMsg struct {
+	Hello bool `json:"hello"`
+}
+
 // Client.
 func main() {
 	flag.Parse()
@@ -36,12 +40,26 @@ func main() {
 	defer out.Close()
 
 	if *useWebsockets {
-		ws, err := websocket.Dial("ws://localhost:8080/", "", "http://localhost:8080")
+		ws, err := websocket.Dial("ws://localhost:8080/ws/music-stream", "", "http://localhost:8080")
+		// ws, err := websocket.Dial("ws://localhost:8080/ws/music-stream-v1", "", "http://localhost:8080")
 
 		if err != nil {
 			log.Fatalf("failed to dial socket server %v", err)
 		}
 
+		// for {
+		// 	msg := ExMsg{}
+		// 	if err := websocket.JSON.Receive(ws, &msg); err != nil {
+		// 		if err == io.EOF {
+		// 			glog.Infof("end of file %v", err.Error())
+
+		// 			break
+		// 		}
+
+		// 	}
+
+		// 	log.Printf("DEBUG spot 1 %v", msg)
+		// }
 		for {
 			var chunkByte []byte
 			if err := websocket.Message.Receive(ws, &chunkByte); err != nil {
