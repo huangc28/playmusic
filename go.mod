@@ -4,6 +4,7 @@ go 1.16
 
 require (
 	github.com/golang/glog v0.0.0-20210429001901-424d2337a529
+	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/kkdai/youtube/v2 v2.7.2 // indirect
 	golang.org/x/net v0.0.0-20210614182718-04defd469f4e

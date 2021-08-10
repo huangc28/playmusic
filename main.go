@@ -1,15 +1,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/gorilla/mux"
 	"golang.org/x/net/websocket"
 )
 
@@ -83,6 +88,7 @@ func HandleHttp(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	var wait time.Duration
 	flag.Parse()
 
 	// We need to initialize hub in a gorouting to handle following
@@ -93,18 +99,61 @@ func main() {
 	hub := newHub()
 	go hub.Run()
 
+	r := mux.NewRouter()
+
+	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
+	r.HandleFunc("/", serveHome).Methods("POST")
+	r.HandleFunc("/audio-source", getAudioSourceFromYTUrl).Methods("GET")
+	r.HandleFunc("/ws/chatroom", serveChatroom).Methods("GET")
+	r.HandleFunc("/ws/music-stream", func(w http.ResponseWriter, r *http.Request) {
+		serveMusicStream(hub, w, r)
+	}).Methods("GET")
+
+	srv := &http.Server{
+		Handler:      r,
+		Addr:         ":8080",
+		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  15 * time.Second,
+	}
+
 	// Serve http request handler
 	// Serve websocket request handler
-	http.HandleFunc("/", serveHome)
-	http.HandleFunc("/ws/chatroom", serveChatroom)
-	http.HandleFunc("/ws/music-stream", func(w http.ResponseWriter, r *http.Request) {
-		serveMusicStream(hub, w, r)
-	})
+	//http.HandleFunc("/", serveHome)
+	// http.HandleFunc("/", getAudioSourceFromYTUrl)
+	// http.HandleFunc("/ws/chatroom", serveChatroom)
+	// http.HandleFunc("/ws/music-stream", func(w http.ResponseWriter, r *http.Request) {
+	// 	serveMusicStream(hub, w, r)
+	// })
 
-	http.HandleFunc("/ws/music-stream-v1", func(w http.ResponseWriter, r *http.Request) {
-		websocket.Handler(HandleWebSockets).ServeHTTP(w, r)
-	})
+	// http.HandleFunc("/ws/music-stream-v1", func(w http.ResponseWriter, r *http.Request) {
+	// 	websocket.Handler(HandleWebSockets).ServeHTTP(w, r)
+	// })
 
-	glog.Infof("Serving...")
-	glog.Fatal(http.ListenAndServe(":8080", nil))
+	go func() {
+		if err := srv.ListenAndServe(); err != nil {
+			log.Println(err)
+		}
+	}()
+
+	c := make(chan os.Signal, 1)
+	// We'll accept graceful shutdowns when quit via SIGINT (Ctrl+C)
+	// SIGKILL, SIGQUIT or SIGTERM (Ctrl+/) will not be caught.
+	signal.Notify(c, os.Interrupt)
+
+	// Block until we receive our signal.
+	<-c
+
+	// Create a deadline to wait for.
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	// Doesn't block if no connections, but will otherwise wait
+	// until the timeout deadline.
+	srv.Shutdown(ctx)
+	// Optionally, you could run srv.Shutdown in a goroutine and block on
+	// <-ctx.Done() if your application should wait for other services
+	// to finalize based on context cancellation.
+	log.Println("shutting down")
+	os.Exit(0)
 }
